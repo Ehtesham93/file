@@ -80,7 +80,7 @@ export default class GeofenceSvcDB {
     }
 
     async createGeofenceWithRule(accountId, userId, fleetId, geofenceName, geofenceInfo, meta, rule, vehicles) {
-        const expiryAt = rule?.expiry_at ?? computeExpiryAt(rule?.expiryDuration);
+        const expiryAt = rule?.expiry_at ?? rule?.meta?.expiry_at ?? computeExpiryAt(rule?.expiryDuration);
         try {
             const createGeofenceResult = await this.createGeofence(
                 accountId,
@@ -314,14 +314,20 @@ export default class GeofenceSvcDB {
     async getGeofenceAndRuleWithVehicles(accountId, fleetId, geofenceId, ruleId) {
         try {
             const geoFenceById = await this.getGeofenceById(accountId, null, fleetId, geofenceId);
-            let ruleId = await this.pgPoolI.Query(`SELECT ruleid FROM geofenceruleinfo WHERE accountid = $1 AND fleetid = $2 AND geofenceid = $3`, [accountId, fleetId, geofenceId]);
-            ruleId = ruleId.rows[0]?.ruleid;
-            if (!ruleId) {
-                throw {
-                    errcode: 'RULE_NOT_FOUND',
-                };
+            // If ruleId not passed, fetch it from mapping table
+            let finalRuleId = ruleId;
+            if (!finalRuleId) {
+            const ruleRes = await this.pgPoolI.Query(
+            `SELECT ruleid FROM geofenceruleinfo WHERE accountid = $1 AND fleetid = $2 AND geofenceid = $3`,
+            [accountId, fleetId, geofenceId]
+            );
+            finalRuleId = ruleRes.rows[0]?.ruleid;
             }
-            const ruleById = await this.getRuleById(accountId, null, fleetId, ruleId);
+            if (!finalRuleId) {
+            throw { errcode: 'RULE_NOT_FOUND' };
+            }
+
+            const ruleById = await this.getRuleById(accountId, null, fleetId, finalRuleId);
             return {
                 geofenceid: geoFenceById?.geofenceid,
                 ruleid: ruleById?.ruleid,
@@ -738,8 +744,19 @@ export default class GeofenceSvcDB {
                 const query = `INSERT INTO geofencerule (
                 accountid, fleetid, ruleid, rulename, ruletypeid, isactive, rulemeta, expiry_at, createdat, createdby, updatedat, updatedby) 
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`;
-                await txclient.query(query, [accountId, fleetId, ruleId, rule.rulename, rule.ruletypeid, true, rule.meta, rule.expiryAt, 
-                    new Date(), userId, new Date(), userId]);
+                await txclient.query(query, 
+                    [accountId, 
+                    fleetId, 
+                    ruleId, 
+                    rule.rulename, 
+                    rule.ruletypeid, 
+                    true, 
+                    rule.meta, 
+                    rule.expiryAt, 
+                    new Date(), 
+                    userId, 
+                    new Date(), 
+                    userId]);
 
                 promises = [];
                 for (const ruleGeofence of ruleGeofences) {
@@ -808,17 +825,24 @@ export default class GeofenceSvcDB {
                                 AND (r.expiry_at IS NULL OR r.expiry_at > now())
                                 AND rt.ruletypeid = r.ruletypeid`;
             promises.push(this.pgPoolI.Query(query, [accountId, fleetId, ruleId]));
-            query = `SELECT rg.geofenceid, g.geofencename, g.geofenceinfo, g.meta, rg.seqno, rg.actiontypeid, ga.actiontype, 
-                    rg.geofencerulemeta 
-                    FROM geofenceruleinfo rg, geofence g, rulegeofenceaction ga
-                    WHERE rg.accountid = $1 
-                        AND rg.fleetid = $2 
-                        AND rg.ruleid = $3 
-                        AND g.accountid = rg.accountid 
-                        AND g.fleetid = rg.fleetid 
-                        AND (r.expiry_at IS NULL OR r.expiry_at > now())
-                        AND g.geofenceid = rg.geofenceid
-                        AND ga.actiontypeid = rg.actiontypeid`;
+            query = `SELECT rg.geofenceid, g.geofencename, g.geofenceinfo, g.meta,
+            rg.seqno, rg.actiontypeid, ga.actiontype, rg.geofencerulemeta
+            FROM geofenceruleinfo rg
+            JOIN geofence g
+                ON g.accountid = rg.accountid
+                AND g.fleetid = rg.fleetid
+                AND g.geofenceid = rg.geofenceid
+            JOIN rulegeofenceaction ga
+                ON ga.actiontypeid = rg.actiontypeid
+            JOIN geofencerule r
+                ON r.accountid = rg.accountid
+                AND r.fleetid = rg.fleetid
+                AND r.ruleid = rg.ruleid
+            WHERE rg.accountid = $1
+                AND rg.fleetid = $2
+                AND rg.ruleid = $3
+                AND r.isdeleted = false
+                AND (r.expiry_at IS NULL OR r.expiry_at > now())`;
             promises.push(this.pgPoolI.Query(query, [accountId, fleetId, ruleId]));
             query = `SELECT gv.vinno, v.license_plate as regno
                         FROM   geofencerulevehicle gv, ${this.config.schemas.fmscoresch}.fleet_vehicle fv, ${this.config.schemas.fmscoresch}.vehicle v
