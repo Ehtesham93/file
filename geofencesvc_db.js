@@ -783,14 +783,14 @@ export default class GeofenceSvcDB {
 
     async listRules(accountId, userId, fleetIds) {
         try {
-            const query = `SELECT r.fleetid, r.ruleid, r.rulename, r.rulemeta, rt.ruletype, r.isactive FROM geofencerule r, 
-                            geofenceruletype rt 
-                            WHERE r.accountid = $1 
-                                AND r.fleetid = ANY($2::uuid[]) 
-                                AND rt.ruletypeid = r.ruletypeid
-                                AND r.isdeleted = false
-                                AND (r.expiry_at IS NULL OR r.expiry_at > now())
-                                ORDER BY r.createdat DESC`;
+            const query = `SELECT r.fleetid, r.ruleid, r.rulename, r.rulemeta, rt.ruletype, r.isactive, r.expiry_at
+             FROM geofencerule r, geofenceruletype rt
+             WHERE r.accountid = $1
+               AND r.fleetid = ANY($2::uuid[])
+               AND rt.ruletypeid = r.ruletypeid
+               AND r.isdeleted = false
+               AND (r.expiry_at IS NULL OR r.expiry_at > now())
+             ORDER BY r.createdat DESC`;
             const result = await this.pgPoolI.Query(query, [accountId, fleetIds]);
             const rows = result.rows;
             const response = rows.map((row) => ({
@@ -817,12 +817,12 @@ export default class GeofenceSvcDB {
                 };
             }
             const promises = [];
-            let query = `SELECT r.fleetid, r.ruleid, r.rulename, r.rulemeta, rt.ruletype, r.ruletypeid, r.isactive FROM geofencerule r, 
+            let query = `SELECT r.fleetid, r.ruleid, r.rulename, r.rulemeta, rt.ruletype, r.ruletypeid, r.isactive, r.expiry_at FROM geofencerule r, 
                             geofenceruletype rt 
                             WHERE r.accountid = $1 
                                 AND r.fleetid = $2 
                                 AND r.ruleid = $3
-                                AND (r.expiry_at IS NULL OR r.expiry_at > now())
+                                AND r.isdeleted = false
                                 AND rt.ruletypeid = r.ruletypeid`;
             promises.push(this.pgPoolI.Query(query, [accountId, fleetId, ruleId]));
             query = `SELECT rg.geofenceid, g.geofencename, g.geofenceinfo, g.meta,
@@ -842,7 +842,7 @@ export default class GeofenceSvcDB {
                 AND rg.fleetid = $2
                 AND rg.ruleid = $3
                 AND r.isdeleted = false
-                AND (r.expiry_at IS NULL OR r.expiry_at > now())`;
+            )`;
             promises.push(this.pgPoolI.Query(query, [accountId, fleetId, ruleId]));
             query = `SELECT gv.vinno, v.license_plate as regno
                         FROM   geofencerulevehicle gv, ${this.config.schemas.fmscoresch}.fleet_vehicle fv, ${this.config.schemas.fmscoresch}.vehicle v
